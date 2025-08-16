@@ -11,8 +11,14 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Configure logging to stderr to avoid interfering with JSON-RPC over stdout
+import sys
+logging.basicConfig(
+    level=logging.INFO,
+    stream=sys.stderr,  # Send logs to stderr, not stdout
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
 logger = logging.getLogger("medchem-mcp-server")
 
 # Create FastMCP server instance
@@ -104,33 +110,8 @@ def get_molecule_info(name: str) -> str:
     """
     molecule_name = name.lower()
     
-    # Extended molecule database
-    molecules = {
-        "aspirin": {
-            "name": "Aspirin",
-            "formula": "C9H8O4",
-            "molecular_weight": 180.16,
-            "smiles": "CC(=O)OC1=CC=CC=C1C(=O)O",
-            "description": "Aspirin is a medication used to reduce pain, fever, or inflammation."
-        },
-        "caffeine": {
-            "name": "Caffeine",
-            "formula": "C8H10N4O2",
-            "molecular_weight": 194.19,
-            "smiles": "CN1C=NC2=C1C(=O)N(C(=O)N2C)C",
-            "description": "Caffeine is a central nervous system stimulant."
-        },
-        "glucose": {
-            "name": "Glucose",
-            "formula": "C6H12O6",
-            "molecular_weight": 180.16,
-            "smiles": "C(C1C(C(C(C(O1)O)O)O)O)O",
-            "description": "Glucose is a simple sugar and an important carbohydrate in biology."
-        }
-    }
-    
-    if molecule_name in molecules:
-        mol = molecules[molecule_name]
+    if molecule_name in MOLECULE_DATA:
+        mol = MOLECULE_DATA[molecule_name]
         result = f"Molecule: {mol['name']}\n"
         result += f"Formula: {mol['formula']}\n"
         result += f"Molecular Weight: {mol['molecular_weight']} g/mol\n"
@@ -138,7 +119,7 @@ def get_molecule_info(name: str) -> str:
         result += f"Description: {mol['description']}"
         return result
     else:
-        available = ", ".join(molecules.keys())
+        available = ", ".join(MOLECULE_DATA.keys())
         return f"Molecule '{molecule_name}' not found. Available molecules: {available}"
 
 
@@ -156,4 +137,8 @@ def echo(message: str) -> str:
 
 
 if __name__ == "__main__":
-    mcp.run()
+    try:
+        mcp.run()
+    except Exception as e:
+        logger.error(f"Server error: {e}", exc_info=True)
+        sys.exit(1)
