@@ -41,6 +41,20 @@ from medchem_mcp_server.molecule_utilities import (
     add_missing_protein_atoms
 )
 
+# Import molecule editing utilities (if available)
+try:
+    from medchem_mcp_server.molecule_editing import (
+        load_and_prepare_molecule,
+        create_templated_molecule,
+        apply_edit_plan,
+        validate_molecule,
+        COMMON_R_GROUPS,
+        COMMON_SCAFFOLDS
+    )
+    EDITING_AVAILABLE = True
+except ImportError:
+    EDITING_AVAILABLE = False
+
 logger = logging.getLogger("medchem-mcp-server")
 
 # Molecule management tools
@@ -1541,4 +1555,528 @@ def create_session() -> types.TextContent:
     return types.TextContent(
         type="text",
         text=f"New session created!\nSession ID: {session_id}\n\nUse this ID for all subsequent operations in this session."
+    )
+
+
+# ============================================================================
+# Molecule Editing Session Tools
+# ============================================================================
+
+def edit_stored_molecule(molecule_id: str, edits_json: str, 
+                        session_id: Optional[str] = None,
+                        store_result: bool = True) -> types.TextContent:
+    """
+    Apply edit operations to a stored molecule.
+    
+    Args:
+        molecule_id: ID of stored molecule
+        edits_json: JSON string with edit operations
+        session_id: Session ID
+        store_result: Whether to store the edited molecule
+    
+    Returns:
+        TextContent with edited molecule information
+    """
+    
+    if not EDITING_AVAILABLE:
+        return types.TextContent(
+            type="text",
+            text="Error: Molecule editing tools not available"
+        )
+    
+    # Get or create session
+    session_id = session_manager.get_or_create_session(session_id)
+    
+    # Get the molecule
+    molecule = session_manager.get_molecule(session_id, molecule_id)
+    
+    if molecule is None:
+        return types.TextContent(
+            type="text",
+            text=f"Molecule {molecule_id} not found in session {session_id}"
+        )
+    
+    try:
+        # Load molecule
+        mol = load_and_prepare_molecule(molecule.smiles)
+        if mol is None:
+            return types.TextContent(
+                type="text",
+                text="Error: Could not parse molecule"
+            )
+        
+        # Apply edits
+        edited_mol, messages = apply_edit_plan(mol, edits_json)
+        
+        if edited_mol is None:
+            return types.TextContent(
+                type="text",
+                text=json.dumps({
+                    "molecule_id": molecule_id,
+                    "original_smiles": molecule.smiles,
+                    "error": "Edit plan failed",
+                    "messages": messages
+                }, indent=2)
+            )
+        
+        # Get edited SMILES
+        edited_smiles = Chem.MolToSmiles(edited_mol)
+        
+        # Calculate properties
+        edited_properties = {
+            "molecular_weight": Descriptors.MolWt(edited_mol),
+            "logp": Descriptors.MolLogP(edited_mol),
+            "hbd": Descriptors.NumHDonors(edited_mol),
+            "hba": Descriptors.NumHAcceptors(edited_mol),
+            "rotatable_bonds": Descriptors.NumRotatableBonds(edited_mol),
+            "tpsa": Descriptors.TPSA(edited_mol),
+            "num_atoms": edited_mol.GetNumAtoms(),
+            "num_bonds": edited_mol.GetNumBonds()
+        }
+        
+        # Validate
+        validation = validate_molecule(edited_mol)
+        
+        # Store if requested
+        new_molecule_id = None
+        if store_result:
+            original_name = molecule.name or "Unknown"
+            new_molecule_id = session_manager.add_molecule(
+                session_id=session_id,
+                smiles=edited_smiles,
+                name=f"Edited_{original_name}",
+                properties=edited_properties,
+                tags=["edited", f"from_{molecule_id}"]
+            )
+        
+        result = {
+            "original_molecule_id": molecule_id,
+            "original_smiles": molecule.smiles,
+            "edited_smiles": edited_smiles,
+            "edit_messages": messages,
+            "original_properties": molecule.properties,
+            "edited_properties": edited_properties,
+            "validation": validation,
+            "new_molecule_id": new_molecule_id,
+            "session_id": session_id
+        }
+        
+        return types.TextContent(
+            type="text",
+            text=json.dumps(result, indent=2)
+        )
+        
+    except Exception as e:
+        logger.error(f"Error editing molecule: {e}")
+        return types.TextContent(
+            type="text",
+            text=f"Error: {str(e)}"
+        )
+
+
+def template_stored_molecule(molecule_id: str, session_id: Optional[str] = None) -> types.TextContent:
+    """
+    Create a template with labeled R-groups from a stored molecule.
+    
+    Args:
+        molecule_id: ID of stored molecule
+        session_id: Session ID
+    
+    Returns:
+        TextContent with template information
+    """
+    
+    if not EDITING_AVAILABLE:
+        return types.TextContent(
+            type="text",
+            text="Error: Molecule editing tools not available"
+        )
+    
+    # Get or create session
+    session_id = session_manager.get_or_create_session(session_id)
+    
+    # Get the molecule
+    molecule = session_manager.get_molecule(session_id, molecule_id)
+    
+    if molecule is None:
+        return types.TextContent(
+            type="text",
+            text=f"Molecule {molecule_id} not found in session {session_id}"
+        )
+    
+    try:
+        # Load molecule
+        mol = load_and_prepare_molecule(molecule.smiles)
+        if mol is None:
+            return types.TextContent(
+                type="text",
+                text="Error: Could not parse molecule"
+            )
+        
+        # Create template
+        template_info = create_templated_molecule(mol)
+        
+        # Add molecule info
+        template_info["molecule_id"] = molecule_id
+        template_info["molecule_name"] = molecule.name or "Unknown"
+        template_info["session_id"] = session_id
+        
+        # Store template components if successful
+        if "scaffold_smiles" in template_info and template_info["scaffold_smiles"]:
+            scaffold_id = session_manager.add_molecule(
+                session_id=session_id,
+                smiles=template_info["scaffold_smiles"],
+                name=f"Scaffold_{molecule.name or 'Unknown'}",
+                tags=["scaffold", f"from_{molecule_id}"]
+            )
+            template_info["scaffold_molecule_id"] = scaffold_id
+        
+        return types.TextContent(
+            type="text",
+            text=json.dumps(template_info, indent=2)
+        )
+        
+    except Exception as e:
+        logger.error(f"Error creating template: {e}")
+        return types.TextContent(
+            type="text",
+            text=f"Error: {str(e)}"
+        )
+
+
+def get_available_r_groups(group_type: Optional[str] = None) -> types.TextContent:
+    """
+    Get available R-groups for molecule editing.
+    
+    Args:
+        group_type: Optional type filter (alkyl, aromatic, polar, etc.)
+    
+    Returns:
+        TextContent with available R-groups
+    """
+    
+    if not EDITING_AVAILABLE:
+        return types.TextContent(
+            type="text",
+            text="Error: Molecule editing tools not available"
+        )
+    
+    if group_type and group_type in COMMON_R_GROUPS:
+        groups = {group_type: COMMON_R_GROUPS[group_type]}
+    else:
+        groups = COMMON_R_GROUPS
+    
+    # Add visual representations if possible
+    result = {
+        "available_types": list(COMMON_R_GROUPS.keys()),
+        "r_groups": groups,
+        "usage": "Use these fragments in edit operations with [*:n] as attachment points"
+    }
+    
+    return types.TextContent(
+        type="text",
+        text=json.dumps(result, indent=2)
+    )
+
+
+def get_available_scaffolds() -> types.TextContent:
+    """
+    Get available scaffolds for scaffold hopping.
+    
+    Returns:
+        TextContent with available scaffolds
+    """
+    
+    if not EDITING_AVAILABLE:
+        return types.TextContent(
+            type="text",
+            text="Error: Molecule editing tools not available"
+        )
+    
+    result = {
+        "scaffolds": COMMON_SCAFFOLDS,
+        "usage": "Use these scaffolds in scaffold_swap operations with matching [*:n] labels"
+    }
+    
+    return types.TextContent(
+        type="text",
+        text=json.dumps(result, indent=2)
+    )
+
+
+def dock_ligand_with_vina(session_id: str, protein_file_id: str, ligand_file_id: str,
+                         center: Optional[list[float]] = None, box_size: list[float] = [20.0, 20.0, 20.0],
+                         exhaustiveness: int = 8, num_modes: int = 9,
+                         energy_range: float = 3.0) -> types.TextContent:
+    """
+    Perform molecular docking using AutoDock Vina command-line executable.
+    
+    Args:
+        session_id: Session ID
+        protein_file_id: File ID of prepared protein PDBQT file
+        ligand_file_id: File ID of prepared ligand PDBQT file
+        center: Center coordinates [x, y, z] for docking box. If None, calculated from ligand center of mass.
+        box_size: Size of docking box [x, y, z] in Angstroms
+        exhaustiveness: Thoroughness of search (default: 8)
+        num_modes: Maximum number of binding modes to generate (default: 9)
+        energy_range: Maximum energy difference between best and worst modes (default: 3.0 kcal/mol)
+    
+    Returns:
+        TextContent with docking results
+    """
+    import os
+    import subprocess
+    import tempfile
+    import re
+    from medchem_mcp_server.molecule_utilities import calculate_ligand_center_of_mass
+    
+    results = ["Molecular Docking with AutoDock Vina", "=" * 50]
+    
+    try:
+        # Get session
+        session = session_manager.get_session(session_id)
+        if not session or not session.tmp_dir:
+            return types.TextContent(
+                type="text",
+                text="Error: Session not found or temp directory not available"
+            )
+        
+        # Get protein PDBQT file
+        protein_file = session_manager.get_file(session_id, protein_file_id)
+        if not protein_file or protein_file.file_type != "pdbqt":
+            return types.TextContent(
+                type="text",
+                text=f"Error: Protein PDBQT file {protein_file_id} not found or invalid type"
+            )
+        
+        # Get ligand PDBQT file
+        ligand_file = session_manager.get_file(session_id, ligand_file_id)
+        if not ligand_file or ligand_file.file_type != "pdbqt":
+            return types.TextContent(
+                type="text",
+                text=f"Error: Ligand PDBQT file {ligand_file_id} not found or invalid type"
+            )
+        
+        protein_path = protein_file.file_path
+        ligand_path = ligand_file.file_path
+        
+        results.append(f"Protein: {protein_file.original_name}")
+        results.append(f"Ligand: {ligand_file.original_name}")
+        
+        # Calculate center from ligand if not provided
+        if center is None:
+            center = calculate_ligand_center_of_mass(ligand_path)
+            results.append(f"Calculated ligand center of mass: [{center[0]:.2f}, {center[1]:.2f}, {center[2]:.2f}]")
+        else:
+            results.append(f"Using provided center: [{center[0]:.2f}, {center[1]:.2f}, {center[2]:.2f}]")
+        
+        results.append(f"Box size: [{box_size[0]:.1f}, {box_size[1]:.1f}, {box_size[2]:.1f}] Å")
+        results.append(f"Exhaustiveness: {exhaustiveness}")
+        results.append(f"Number of modes: {num_modes}")
+        results.append(f"Energy range: {energy_range} kcal/mol")
+        results.append("")
+        
+        # Create output file for docked poses
+        docked_filename = f"docked_{ligand_file.original_name.replace('.pdbqt', '')}_poses.pdbqt"
+        docked_path = os.path.join(session.tmp_dir, docked_filename)
+        
+        # Create log file
+        log_filename = f"docking_{ligand_file.original_name.replace('.pdbqt', '')}_log.txt"
+        log_path = os.path.join(session.tmp_dir, log_filename)
+        
+        # Build vina command
+        cmd = [
+            'vina',
+            '--receptor', protein_path,
+            '--ligand', ligand_path,
+            '--out', docked_path,
+            '--log', log_path,
+            '--center_x', str(center[0]),
+            '--center_y', str(center[1]),
+            '--center_z', str(center[2]),
+            '--size_x', str(box_size[0]),
+            '--size_y', str(box_size[1]),
+            '--size_z', str(box_size[2]),
+            '--exhaustiveness', str(exhaustiveness),
+            '--num_modes', str(num_modes),
+            '--energy_range', str(energy_range),
+            '--cpu', '0'  # Use all available CPUs
+        ]
+        
+        results.append("🚀 Running AutoDock Vina...")
+        results.append(f"Command: {' '.join(cmd)}")
+        results.append("")
+        
+        # Run vina command
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        
+        if result.returncode != 0:
+            results.append(f"❌ Vina failed with return code {result.returncode}")
+            results.append(f"Error output: {result.stderr}")
+            return types.TextContent(
+                type="text",
+                text="\n".join(results)
+            )
+        
+        # Parse results from log file
+        if os.path.exists(log_path):
+            with open(log_path, 'r') as f:
+                log_content = f.read()
+            
+            # Extract binding affinities
+            affinity_pattern = r'^\s*(\d+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)'
+            affinities = []
+            
+            for line in log_content.split('\n'):
+                match = re.match(affinity_pattern, line.strip())
+                if match:
+                    mode, affinity, rmsd_lb, rmsd_ub = match.groups()
+                    affinities.append({
+                        'mode': int(mode),
+                        'affinity': float(affinity),
+                        'rmsd_lb': float(rmsd_lb),
+                        'rmsd_ub': float(rmsd_ub)
+                    })
+            
+            if affinities:
+                results.append("✅ Docking completed successfully!")
+                results.append("")
+                results.append("📊 Binding Affinities:")
+                results.append("Mode | Affinity (kcal/mol) | RMSD l.b. | RMSD u.b.")
+                results.append("-" * 50)
+                
+                for aff in affinities:
+                    results.append(f"{aff['mode']:4d} | {aff['affinity']:15.2f} | {aff['rmsd_lb']:9.2f} | {aff['rmsd_ub']:9.2f}")
+                
+                results.append("")
+                results.append(f"🏆 Best binding affinity: {affinities[0]['affinity']:.2f} kcal/mol (Mode 1)")
+            else:
+                results.append("⚠️  Could not parse binding affinities from log file")
+        
+        # Save docked poses to session
+        if os.path.exists(docked_path):
+            with open(docked_path, 'r') as f:
+                docked_content = f.read()
+            
+            docked_file_id = session_manager.save_file(
+                session_id=session_id,
+                content=docked_content,
+                filename=docked_filename,
+                file_type="pdbqt",
+                tags=["docked", "poses", "vina", ligand_file.original_name.replace('.pdbqt', '')]
+            )
+            
+            results.append(f"💾 Docked poses saved: {docked_file_id}")
+            results.append(f"   File: {docked_filename}")
+        
+        # Save log file to session
+        if os.path.exists(log_path):
+            with open(log_path, 'r') as f:
+                log_content = f.read()
+            
+            log_file_id = session_manager.save_file(
+                session_id=session_id,
+                content=log_content,
+                filename=log_filename,
+                file_type="txt",
+                tags=["docking", "log", "vina", ligand_file.original_name.replace('.pdbqt', '')]
+            )
+            
+            results.append(f"📋 Docking log saved: {log_file_id}")
+            results.append(f"   File: {log_filename}")
+        
+        results.append("")
+        results.append("🎯 Docking workflow completed!")
+        
+    except Exception as e:
+        results.append(f"\n❌ Error during docking: {str(e)}")
+        logger.error(f"Error during docking: {e}", exc_info=True)
+    
+    return types.TextContent(
+        type="text",
+        text="\n".join(results)
+    )
+
+
+def score_ligand_with_vina(session_id: str, protein_file_id: str, ligand_file_id: str,
+                          center: Optional[list[float]] = None, 
+                          box_size: list[float] = [20.0, 20.0, 20.0]) -> types.TextContent:
+    """
+    Score a ligand pose using AutoDock Vina without performing docking.
+    
+    Args:
+        session_id: Session ID
+        protein_file_id: File ID of prepared protein PDBQT file
+        ligand_file_id: File ID of prepared ligand PDBQT file
+        center: Center coordinates [x, y, z] for scoring box. If None, calculated from ligand center of mass.
+        box_size: Size of scoring box [x, y, z] in Angstroms
+    
+    Returns:
+        TextContent with scoring results
+    """
+    from medchem_mcp_server.molecule_utilities import vina_score
+    
+    results = ["Ligand Scoring with AutoDock Vina", "=" * 50]
+    
+    try:
+        # Get session
+        session = session_manager.get_session(session_id)
+        if not session:
+            return types.TextContent(
+                type="text",
+                text="Error: Session not found"
+            )
+        
+        # Get protein PDBQT file
+        protein_file = session_manager.get_file(session_id, protein_file_id)
+        if not protein_file or protein_file.file_type != "pdbqt":
+            return types.TextContent(
+                type="text",
+                text=f"Error: Protein PDBQT file {protein_file_id} not found or invalid type"
+            )
+        
+        # Get ligand PDBQT file
+        ligand_file = session_manager.get_file(session_id, ligand_file_id)
+        if not ligand_file or ligand_file.file_type != "pdbqt":
+            return types.TextContent(
+                type="text",
+                text=f"Error: Ligand PDBQT file {ligand_file_id} not found or invalid type"
+            )
+        
+        protein_path = protein_file.file_path
+        ligand_path = ligand_file.file_path
+        
+        results.append(f"Protein: {protein_file.original_name}")
+        results.append(f"Ligand: {ligand_file.original_name}")
+        
+        if center:
+            results.append(f"Center: [{center[0]:.2f}, {center[1]:.2f}, {center[2]:.2f}]")
+        else:
+            results.append("Center: Will be calculated from ligand center of mass")
+            
+        results.append(f"Box size: [{box_size[0]:.1f}, {box_size[1]:.1f}, {box_size[2]:.1f}] Å")
+        results.append("")
+        
+        # Score the ligand
+        results.append("🧮 Calculating Vina score...")
+        score = vina_score(protein_path, ligand_path, center, box_size)
+        
+        results.append("✅ Scoring completed!")
+        results.append("")
+        results.append(f"🎯 Vina Score: {score:.2f} kcal/mol")
+        
+        if score < -7.0:
+            results.append("   📊 Interpretation: Strong binding predicted")
+        elif score < -5.0:
+            results.append("   📊 Interpretation: Moderate binding predicted")
+        else:
+            results.append("   📊 Interpretation: Weak binding predicted")
+        
+    except Exception as e:
+        results.append(f"\n❌ Error during scoring: {str(e)}")
+        logger.error(f"Error during scoring: {e}", exc_info=True)
+    
+    return types.TextContent(
+        type="text",
+        text="\n".join(results)
     )

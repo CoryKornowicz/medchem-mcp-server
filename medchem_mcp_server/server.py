@@ -42,6 +42,9 @@ from medchem_mcp_server.session_tools import (
     # Docking preparation
     prepare_protein_for_docking,
     prepare_ligand_for_docking,
+    # Docking tools
+    dock_ligand_with_vina,
+    score_ligand_with_vina,
     # Protein management
     store_protein,
     list_stored_proteins,
@@ -54,7 +57,31 @@ from medchem_mcp_server.session_tools import (
     read_stored_file,
     # Collection management
     create_collection,
-    get_collection
+    get_collection,
+    # Molecule editing
+    edit_stored_molecule,
+    template_stored_molecule,
+    get_available_r_groups,
+    get_available_scaffolds
+)
+
+# Import ZINC tools
+from medchem_mcp_server.zinc_tooling import (
+    fetch_zinc_molecule,
+    fetch_zinc_batch,
+    search_zinc_similarity,
+    search_zinc_substructure,
+    prepare_zinc_molecule_for_editing
+)
+
+# Import ZINC editing integration tools
+from medchem_mcp_server.zinc_editing_tools import (
+    fetch_and_edit_zinc_molecule,
+    create_zinc_analog_series,
+    scaffold_hop_zinc_molecule,
+    fragment_and_recombine_zinc,
+    apply_medchem_transforms,
+    visualize_zinc_edits
 )
 
 # Configure logging to stderr to avoid interfering with JSON-RPC over stdout
@@ -99,6 +126,10 @@ mcp.tool()(get_ligand_image)
 mcp.tool()(prepare_protein_for_docking)
 mcp.tool()(prepare_ligand_for_docking)
 
+# Register docking tools
+mcp.tool()(dock_ligand_with_vina)
+mcp.tool()(score_ligand_with_vina)
+
 # Register protein session tools
 mcp.tool()(store_protein)
 mcp.tool()(list_stored_proteins)
@@ -114,6 +145,27 @@ mcp.tool()(read_stored_file)
 # Register collection tools
 mcp.tool()(create_collection)
 mcp.tool()(get_collection)
+
+# Register molecule editing session tools
+mcp.tool()(edit_stored_molecule)
+mcp.tool()(template_stored_molecule)
+mcp.tool()(get_available_r_groups)
+mcp.tool()(get_available_scaffolds)
+
+# Register ZINC fetching tools
+mcp.tool()(fetch_zinc_molecule)
+mcp.tool()(fetch_zinc_batch)
+mcp.tool()(search_zinc_similarity)
+mcp.tool()(search_zinc_substructure)
+mcp.tool()(prepare_zinc_molecule_for_editing)
+
+# Register ZINC editing integration tools
+mcp.tool()(fetch_and_edit_zinc_molecule)
+mcp.tool()(create_zinc_analog_series)
+mcp.tool()(scaffold_hop_zinc_molecule)
+mcp.tool()(fragment_and_recombine_zinc)
+mcp.tool()(apply_medchem_transforms)
+mcp.tool()(visualize_zinc_edits)
 
 
 if __name__ == "__main__":

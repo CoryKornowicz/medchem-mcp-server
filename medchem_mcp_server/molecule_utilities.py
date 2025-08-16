@@ -516,31 +516,118 @@ def add_missing_protein_atoms(pdb_path: str, output_path: Optional[str] = None,
     
     return output_path
 
-def vina_score(protein, ligand, center: list[float], box_size: list[float]) -> float:
+def calculate_ligand_center_of_mass(pdbqt_path: str) -> list[float]:
     """
-    Score a ligand using Vina
-    :param protein: path to protein pdbqt file
-    :param ligand: path to ligand pdbqt file
-    :param center: center coordinates for docking box
-    :param box_size: size of docking box
-    :return: score
+    Calculate the center of mass of a ligand from a PDBQT file.
+    
+    Args:
+        pdbqt_path: Path to the ligand PDBQT file
+        
+    Returns:
+        List of [x, y, z] coordinates for the center of mass
     """
     import os
-    from vina import Vina
+    import numpy as np
+    
+    if not os.path.exists(pdbqt_path):
+        raise FileNotFoundError(f"Ligand PDBQT file not found: {pdbqt_path}")
+    
+    coords = []
+    with open(pdbqt_path, 'r') as f:
+        for line in f:
+            if line.startswith('ATOM') or line.startswith('HETATM'):
+                # Extract x, y, z coordinates from PDBQT format
+                # Columns 30-38, 38-46, 46-54 contain x, y, z coordinates
+                try:
+                    x = float(line[30:38].strip())
+                    y = float(line[38:46].strip())
+                    z = float(line[46:54].strip())
+                    coords.append([x, y, z])
+                except (ValueError, IndexError):
+                    continue
+    
+    if not coords:
+        raise ValueError(f"No atomic coordinates found in {pdbqt_path}")
+    
+    # Calculate center of mass (assuming uniform atomic masses for simplicity)
+    coords_array = np.array(coords)
+    center_of_mass = coords_array.mean(axis=0).tolist()
+    
+    return center_of_mass
 
+
+def vina_score(protein: str, ligand: str, center: Optional[list[float]] = None, 
+               box_size: list[float] = [20.0, 20.0, 20.0]) -> float:
+    """
+    Score a ligand using Vina command-line executable.
+    
+    Args:
+        protein: Path to protein PDBQT file
+        ligand: Path to ligand PDBQT file
+        center: Center coordinates for docking box [x, y, z]. If None, will calculate from ligand center of mass.
+        box_size: Size of docking box [x, y, z] in Angstroms. Defaults to [20, 20, 20].
+        
+    Returns:
+        Vina score (affinity in kcal/mol)
+    """
+    import os
+    import subprocess
+    import tempfile
+    import re
+    
     # Verify files exist
     if not os.path.exists(protein):
         raise FileNotFoundError(f"Protein file not found: {protein}")
     if not os.path.exists(ligand):
         raise FileNotFoundError(f"Ligand file not found: {ligand}")
-
-    v = Vina(sf_name='vina')
-    v.set_receptor(protein)
-    v.set_ligand_from_file(ligand)
     
-    v.compute_vina_maps(center=center, box_size=box_size)
-
-    # Score the current pose
-    energy = v.score()
-    return energy
+    # Calculate center from ligand if not provided
+    if center is None:
+        center = calculate_ligand_center_of_mass(ligand)
+        logger.info(f"Calculated ligand center of mass: {center}")
+    
+    # Create temporary output file for scoring
+    with tempfile.NamedTemporaryFile(suffix='_out.pdbqt', delete=False) as tmp_out:
+        tmp_output = tmp_out.name
+    
+    try:
+        # Build vina command
+        cmd = [
+            'vina',
+            '--receptor', protein,
+            '--ligand', ligand,
+            '--out', tmp_output,
+            '--center_x', str(center[0]),
+            '--center_y', str(center[1]),
+            '--center_z', str(center[2]),
+            '--size_x', str(box_size[0]),
+            '--size_y', str(box_size[1]),
+            '--size_z', str(box_size[2]),
+            '--score_only',  # Only score, don't dock
+            '--cpu', '1'  # Use single CPU for scoring
+        ]
+        
+        # Run vina command
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        
+        if result.returncode != 0:
+            raise RuntimeError(f"Vina failed with error: {result.stderr}")
+        
+        # Parse the score from output
+        # Vina outputs: "Affinity: X.XXX (kcal/mol)"
+        score_pattern = r"Affinity:\s+([-\d.]+)\s+\(kcal/mol\)"
+        match = re.search(score_pattern, result.stdout)
+        
+        if match:
+            score = float(match.group(1))
+            logger.info(f"Vina score: {score} kcal/mol")
+            return score
+        else:
+            # If pattern not found, try to find the score in the output
+            raise ValueError(f"Could not parse Vina score from output: {result.stdout}")
+            
+    finally:
+        # Clean up temporary file
+        if os.path.exists(tmp_output):
+            os.remove(tmp_output)
 
