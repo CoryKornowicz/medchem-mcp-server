@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "medchem-mcp-server": {
+      "command": "python",
+      "args": ["-m", "medchem_mcp_server.server"],
+      "cwd": "/Users/corykornowicz/Documents/LiteFold/medchem-mcp-server"
+    }
+  }
+}
