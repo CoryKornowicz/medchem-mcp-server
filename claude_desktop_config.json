@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "medchem-mcp-server": {
-      "command": "python",
+      "command": "/Users/corykornowicz/miniconda3/bin/python",
       "args": ["-m", "medchem_mcp_server.server"],
       "cwd": "/Users/corykornowicz/Documents/LiteFold/medchem-mcp-server"
     }

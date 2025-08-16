@@ -6,13 +6,58 @@ This server provides basic tools for molecular calculations and data retrieval.
 """
 
 import logging
-import re
-from typing import Any
+import sys
 
 from mcp.server.fastmcp import FastMCP
 
+# Import all molecule tools
+from medchem_mcp_server.molecule_tools import (
+    get_molecule_descriptors_from_smiles,
+    search_substructure,
+    get_smiles_from_name,
+    get_weight_from_smiles,
+    find_maximum_common_substructure,
+    smiles_to_image
+)
+
+# Import protein tools
+from medchem_mcp_server.protein_tools import (
+    fetch_pdb_file
+)
+
+# Import session-aware tools
+from medchem_mcp_server.session_tools import (
+    # Session management
+    create_session,
+    get_session_summary,
+    clear_session,
+    # Molecule management
+    store_molecule,
+    list_stored_molecules,
+    get_stored_molecule,
+    # Ligand conversion
+    convert_ligand_pdb_to_sdf,
+    convert_protein_ligands_to_sdf,
+    get_ligand_image,
+    # Docking preparation
+    prepare_protein_for_docking,
+    prepare_ligand_for_docking,
+    # Protein management
+    store_protein,
+    list_stored_proteins,
+    get_stored_protein,
+    get_protein_component_files,
+    analyze_stored_protein,
+    # File management
+    list_stored_files,
+    get_stored_file,
+    read_stored_file,
+    # Collection management
+    create_collection,
+    get_collection
+)
+
 # Configure logging to stderr to avoid interfering with JSON-RPC over stdout
-import sys
 logging.basicConfig(
     level=logging.INFO,
     stream=sys.stderr,  # Send logs to stderr, not stdout
@@ -24,116 +69,51 @@ logger = logging.getLogger("medchem-mcp-server")
 # Create FastMCP server instance
 mcp = FastMCP("medchem-mcp-server")
 
+# Register molecule tools
+mcp.tool()(get_molecule_descriptors_from_smiles)
+mcp.tool()(search_substructure)
+mcp.tool()(get_smiles_from_name)
+mcp.tool()(get_weight_from_smiles)
+mcp.tool()(find_maximum_common_substructure)
+mcp.tool()(smiles_to_image)
 
-# Resource data
-MOLECULE_DATA = {
-    "aspirin": {
-        "name": "Aspirin",
-        "formula": "C9H8O4",
-        "molecular_weight": 180.16,
-        "smiles": "CC(=O)OC1=CC=CC=C1C(=O)O",
-        "description": "Aspirin is a medication used to reduce pain, fever, or inflammation."
-    },
-    "caffeine": {
-        "name": "Caffeine",
-        "formula": "C8H10N4O2", 
-        "molecular_weight": 194.19,
-        "smiles": "CN1C=NC2=C1C(=O)N(C(=O)N2C)C",
-        "description": "Caffeine is a central nervous system stimulant."
-    }
-}
+# Register protein tools
+mcp.tool()(fetch_pdb_file)
 
-@mcp.resource("medchem://molecules/{molecule}")
-def get_molecule_resource(molecule: str) -> str:
-    """Get molecule data as a JSON resource."""
-    if molecule not in MOLECULE_DATA:
-        raise ValueError(f"Unknown molecule: {molecule}")
-    
-    import json
-    return json.dumps(MOLECULE_DATA[molecule], indent=2)
+# Register session management tools
+mcp.tool()(create_session)
+mcp.tool()(get_session_summary)
+mcp.tool()(clear_session)
 
+# Register molecule session tools
+mcp.tool()(store_molecule)
+mcp.tool()(list_stored_molecules)
+mcp.tool()(get_stored_molecule)
 
-# Atomic weights for molecular weight calculations
-ATOMIC_WEIGHTS = {
-    'H': 1.008, 'C': 12.011, 'N': 14.007, 'O': 15.999,
-    'P': 30.974, 'S': 32.065, 'Cl': 35.453, 'Br': 79.904,
-    'F': 18.998, 'I': 126.904, 'Na': 22.990, 'K': 39.098,
-    'Ca': 40.078, 'Mg': 24.305, 'Fe': 55.845, 'Zn': 65.38,
-}
+# Register ligand conversion tools
+mcp.tool()(convert_ligand_pdb_to_sdf)
+mcp.tool()(convert_protein_ligands_to_sdf)
+mcp.tool()(get_ligand_image)
 
+# Register docking preparation tools
+mcp.tool()(prepare_protein_for_docking)
+mcp.tool()(prepare_ligand_for_docking)
 
-@mcp.tool()
-def calculate_molecular_weight(formula: str) -> str:
-    """Calculate molecular weight from a molecular formula.
-    
-    Args:
-        formula: Molecular formula (e.g., 'C6H12O6')
-        
-    Returns:
-        Detailed breakdown of molecular weight calculation
-    """
-    if not formula:
-        raise ValueError("Formula is required")
-        
-    # Basic parser for simple formulas like C6H12O6
-    pattern = r'([A-Z][a-z]?)(\d*)'
-    matches = re.findall(pattern, formula)
-    
-    total_weight = 0.0
-    composition = []
-    
-    for element, count in matches:
-        count = int(count) if count else 1
-        if element in ATOMIC_WEIGHTS:
-            weight = ATOMIC_WEIGHTS[element] * count
-            total_weight += weight
-            composition.append(f"{element}: {count} atoms, {weight:.3f} g/mol")
-        else:
-            raise ValueError(f"Unknown element: {element}")
-    
-    result = f"Molecular formula: {formula}\n"
-    result += f"Molecular weight: {total_weight:.3f} g/mol\n\n"
-    result += "Composition:\n" + "\n".join(composition)
-    
-    return result
+# Register protein session tools
+mcp.tool()(store_protein)
+mcp.tool()(list_stored_proteins)
+mcp.tool()(get_stored_protein)
+mcp.tool()(get_protein_component_files)
+mcp.tool()(analyze_stored_protein)
 
+# Register file session tools
+mcp.tool()(list_stored_files)
+mcp.tool()(get_stored_file)
+mcp.tool()(read_stored_file)
 
-@mcp.tool()
-def get_molecule_info(name: str) -> str:
-    """Get basic information about a molecule by name.
-    
-    Args:
-        name: Name of the molecule (e.g., 'aspirin', 'caffeine')
-        
-    Returns:
-        Detailed molecule information including formula, weight, SMILES, and description
-    """
-    molecule_name = name.lower()
-    
-    if molecule_name in MOLECULE_DATA:
-        mol = MOLECULE_DATA[molecule_name]
-        result = f"Molecule: {mol['name']}\n"
-        result += f"Formula: {mol['formula']}\n"
-        result += f"Molecular Weight: {mol['molecular_weight']} g/mol\n"
-        result += f"SMILES: {mol['smiles']}\n"
-        result += f"Description: {mol['description']}"
-        return result
-    else:
-        available = ", ".join(MOLECULE_DATA.keys())
-        return f"Molecule '{molecule_name}' not found. Available molecules: {available}"
-
-
-@mcp.tool()
-def echo(message: str) -> str:
-    """Simple echo tool for testing.
-    
-    Args:
-        message: Message to echo back
-        
-    Returns:
-        The echoed message with prefix
-    """
-    return f"Echo: {message}"
+# Register collection tools
+mcp.tool()(create_collection)
+mcp.tool()(get_collection)
 
 
 if __name__ == "__main__":

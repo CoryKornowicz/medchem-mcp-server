@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__medchem-mcp-server__create_session",
+      "mcp__medchem-mcp-server__fetch_pdb_file",
+      "mcp__medchem-mcp-server__analyze_stored_protein",
+      "mcp__medchem-mcp-server__get_protein_component_files",
+      "mcp__medchem-mcp-server__list_stored_files",
+      "mcp__medchem-mcp-server__convert_protein_ligands_to_sdf",
+      "mcp__medchem-mcp-server__get_ligand_image"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
